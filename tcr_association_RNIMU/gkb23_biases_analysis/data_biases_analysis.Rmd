@@ -1,0 +1,472 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("ComplexHeatmap")
+
+install.packages("magick")
+```
+
+
+```{r}
+library(gplots)
+library(RColorBrewer)
+library(ggplot2)
+library(ComplexHeatmap)
+library(ggbeeswarm)
+library(magick)
+
+```
+
+
+```{r}
+setwd("/home/daria/github/tcr-association/gkb23_biases_analysis/")
+```
+
+
+
+
+```{r}
+data0 <- fread("features/COVID_VJ_GKB23_features.tsv")
+meta <- fread("metadata/COVID_GKB23_metadata.tsv")
+meta$Tcell_response_level=factor(meta$Tcell_response_level, levels = c("0-1 (no response)", "3-6", "10-20", ">100"))
+```
+
+
+```{r}
+data <- data0 %>%
+rbind(meta %>%
+select(sample_id, number_of_reads, number_of_functional_clones) %>%
+mutate(metric = "Summary") %>%
+melt %>%
+mutate(variable = as.character(variable)))
+```
+
+
+```{r}
+datam <- data %>% merge(meta)
+unique(data$metric)
+```
+
+```{r}
+dataf <- datam %>%
+filter(number_of_reads > LIMIT_READS)
+```
+
+
+
+```{r}
+str(meta)
+```
+
+
+
+```{r fig1, fig.height=7, fig.width=7}
+LIMIT_READS = 10^5
+meta %>%
+ggplot(aes(x = number_of_reads, y =number_of_functional_clones, color =Tcell_response_level )) +
+geom_point() +
+geom_vline(xintercept = LIMIT_READS, linetype = "dashed") +
+scale_x_log10() + scale_y_log10() +
+facet_wrap(~ factor(Tcell_response_level)) +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+theme_minimal() +
+theme(aspect = 1, legend.position = "bottom")
+
+```
+
+
+```{r}
+dataf %>%
+filter(metric == "CDR3LenDistr") %>%
+ggplot(aes(x = variable %>% as.integer/3, y = value)) +
+geom_line(aes(group = sample_id, color = Tcell_response_level), alpha = 0.5) +
+geom_line(data = datam %>% filter(metric == "CDR3LenDistr") %>%
+group_by(variable) %>%
+summarise(value = median(value)), linetype = "dotted") +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +
+facet_wrap(~Tcell_response_level) +
+theme_minimal()
+```
+```{r}
+dataf %>%
+filter(metric == "Hill") %>%
+ggplot(aes(x = gsub("q_", "", variable) %>% as.integer / 3, y = value)) +
+geom_line(aes(group = sample_id, color = Tcell_response_level), alpha = 0.8) +
+geom_line(data = datam %>% filter(metric == "Hill") %>%
+group_by(variable) %>%
+summarise(value = median(value)), linetype = "dotted") +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +
+scale_y_log10() +
+facet_wrap(~Tcell_response_level) +
+theme_minimal()
+```
+
+```{r fig4, fig.height=7, fig.width=9}
+gen_col <- function(x, name = "Set1", rev = T) {
+x <- unique(x)
+res <- brewer.pal(length(x), name)
+if (rev) {
+res <- rev(res)
+}
+if (length(res) < length(x)) {
+res <- colorRampPalette(res)(length(x))
+} else if (length(res) > length(x)) {
+res <- res[1:length(x)]
+}
+names(res) <- x
+res
+}
+dataf %>%
+filter(metric == "J_usage") %>%
+filter(variable != "TRBJ2-2P") -> data.j
+data.j %>%
+dcast(Tcell_response_level + sample_id ~ variable, value.var = "value") -> mat.j
+mat.j.row.meta <- mat.j %>% select(Tcell_response_level)
+rownames(mat.j) <- mat.j$sample_id
+mat.j <- mat.j %>% select(-Tcell_response_level, -sample_id) %>% as.matrix
+Heatmap(
+log10(mat.j + 1e-6),
+col = brewer.pal(9, "YlGnBu"),
+cluster_rows = T,
+cluster_columns = T,
+show_row_names = F,
+right_annotation = with(mat.j.row.meta,
+rowAnnotation(
+Tcell_response_level = Tcell_response_level,
+col = list(
+Tcell_response_level = gen_col(Tcell_response_level, "Greys")
+)
+)
+),
+use_raster = T, raster_resize = T, raster_device = "png")
+
+```
+
+```{r fig5, fig.height=7, fig.width=9}
+dataf %>%
+filter(metric == "V_usage") -> data.v
+data.v %>%
+dcast(Tcell_response_level + sample_id ~ variable, value.var = "value") -> mat.v
+mat.v.row.meta <- mat.v %>% select(Tcell_response_level)
+rownames(mat.v) <- mat.v$sample_id
+mat.v <- mat.v %>% select(-Tcell_response_level, -sample_id) %>% as.matrix
+Heatmap(
+log10(mat.v + 1e-6),
+col = brewer.pal(9, "YlGnBu"),
+cluster_rows = T,
+cluster_columns = T,
+show_row_names = F,
+right_annotation = with(mat.j.row.meta,
+rowAnnotation(
+Tcell_response_level = Tcell_response_level,
+col = list(
+Tcell_response_level = gen_col(Tcell_response_level, "Greys")
+)
+)
+),
+use_raster = T, raster_resize = T, raster_device = "png"
+)
+
+```
+```{r fig6, fig.height=7, fig.width=9}
+dataf %>%
+filter(metric %in% c("V_usage", "J_usage")) %>%
+filter(variable != "TRBJ2-2P") -> data.vj
+data.vj %>%
+dcast(Tcell_response_level + sample_id ~ variable, value.var = "value") -> mat.vj
+mat.vj.row.meta <- mat.vj %>% select(Tcell_response_level)
+rownames(mat.vj) <- mat.vj$sample_id
+mat.vj <- mat.vj %>% select(-Tcell_response_level, -sample_id) %>% as.matrix
+Heatmap(
+log10(mat.vj + 1e-6),
+col = brewer.pal(9, "YlGnBu"),
+cluster_rows = T,
+cluster_columns = T,
+show_row_names = F,
+right_annotation = with(mat.j.row.meta,
+rowAnnotation(
+Tcell_response_level = Tcell_response_level,
+col = list(
+Tcell_response_level = gen_col(Tcell_response_level, "Greys")
+)
+)
+),
+use_raster = T, raster_resize = T, raster_device = "png"
+)
+
+```
+
+```{r}
+dataf %>%
+mutate(vm = paste(metric, variable, sep = ".")) %>%
+dcast(sample_id ~ vm, value.var = "value") -> mat.full
+#dataf %>% filter(variable == "variable")
+#unique(dataf$variable)
+rownames(mat.full) <- mat.full$sample_id
+mat.full$sample_id <- NULL
+mat.full.pc <- prcomp(log10(mat.full + 1e-6),
+scale. = T)
+plot(mat.full.pc)
+```
+```{r}
+mat.full.pc.meta <- merge(data.frame(sample_id = rownames(mat.full)),
+meta %>% select(sample_id, Tcell_response_level))
+```
+
+
+```{r}
+autoplot(mat.full.pc, data = mat.full.pc.meta, colour = 'Tcell_response_level') +
+#scale_color_brewer(palette = "Paired") +
+theme_minimal() +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+theme(aspect = 1, legend.position = "bottom")
+
+
+```
+
+```{r}
+pc.labels <- data.frame(x = rownames(mat.full.pc$rotation)) %>%
+separate(x, c("metric", "variable"), sep = "\\.")
+Heatmap(mat.full.pc$rotation[,1:5],
+cluster_columns = F,
+row_labels = pc.labels$variable,
+col = rev(brewer.pal(9, "Spectral")),
+row_names_gp = gpar(fontsize = 8),
+right_annotation = rowAnnotation(metric = pc.labels$metric,
+col = list(
+metric = gen_col(pc.labels$metric, "Paired")
+))
+)
+```
+
+
+
+```{r}
+data=read.csv('../feature_search/wilcox_test/BOXPLOTS/UNWEIGHT/gkb23_top_public_5000AA/gkb23_public_top_20000.tsv', sep="\t", header=TRUE)
+medi=median(log10(data$WEIGHT_SUM))
+data$COHORT=factor(data$COHORT,  
+                   levels=c("0-1 (no_response)", "3-6", "10-20", ">100"))
+ggplot(data, aes(x=COHORT, y=log10(WEIGHT_SUM))) +  
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) + 
+  geom_hline(yintercept=medi, linetype = "dashed") +
+  geom_quasirandom(method = 'pseudorandom', aes(colour=COHORT), size = 2) +
+  geom_boxplot(notch=FALSE, outlier.size = 0.7, lwd=0.7, alpha = 0) +
+  scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+  theme_light() +              
+  theme(text=element_text(size=14,  family="Comic Sans MS")) +
+  labs(y= "sum of clones", x = "samples") +
+  ggtitle("public clones 20000, unweighted, top 5000")
+```
+
+```{r}
+data=read.csv('../feature_search/wilcox_test/BOXPLOTS/FREQ/gkb23_top_public_5000AA/gkb23_public_top_20000.tsv', sep="\t", header=TRUE)
+medi=median(log10(data$WEIGHT_SUM))
+data$COHORT=factor(data$COHORT,  
+                   levels=c("0-1 (no_response)", "3-6", "10-20", ">100"))
+ggplot(data, aes(x=COHORT, y=log10(WEIGHT_SUM))) +  
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) + 
+  geom_hline(yintercept=medi, linetype = "dashed") +
+  geom_quasirandom(method = 'pseudorandom', aes(colour=COHORT), size = 2) +
+  geom_boxplot(notch=FALSE, outlier.size = 0.7, lwd=0.7, alpha = 0) +
+  scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+  theme_light() +              
+  theme(text=element_text(size=14,  family="Comic Sans MS")) +
+  labs(y= "weighted sum of clones", x = "samples") +
+  ggtitle("public clones 20000, weighted, top 5000")
+```
+```{r}
+pdf("gkb_23_biases_analysis.pdf", width = 10, height = 8) # Open a new pdf file
+
+
+LIMIT_READS = 10^5
+meta %>%
+ggplot(aes(x = number_of_reads, y =number_of_functional_clones, color =Tcell_response_level )) +
+geom_point() +
+geom_vline(xintercept = LIMIT_READS, linetype = "dashed") +
+scale_x_log10() + scale_y_log10() +
+facet_wrap(~ factor(Tcell_response_level)) +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+theme_minimal() +
+theme(aspect = 1, legend.position = "bottom")
+
+
+
+
+
+dataf %>%
+filter(metric == "CDR3LenDistr") %>%
+ggplot(aes(x = variable %>% as.integer/3, y = value)) +
+geom_line(aes(group = sample_id, color = Tcell_response_level), alpha = 0.5) +
+geom_line(data = datam %>% filter(metric == "CDR3LenDistr") %>%
+group_by(variable) %>%
+summarise(value = median(value)), linetype = "dotted") +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +
+facet_wrap(~Tcell_response_level) +
+theme_minimal()
+
+
+dataf %>%
+filter(metric == "Hill") %>%
+ggplot(aes(x = gsub("q_", "", variable) %>% as.integer / 3, y = value)) +
+geom_line(aes(group = sample_id, color = Tcell_response_level), alpha = 0.8) +
+geom_line(data = datam %>% filter(metric == "Hill") %>%
+group_by(variable) %>%
+summarise(value = median(value)), linetype = "dotted") +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +
+scale_y_log10() +
+facet_wrap(~Tcell_response_level) +
+theme_minimal()
+
+
+gen_col <- function(x, name = "Set1", rev = T) {
+x <- unique(x)
+res <- brewer.pal(length(x), name)
+if (rev) {
+res <- rev(res)
+}
+if (length(res) < length(x)) {
+res <- colorRampPalette(res)(length(x))
+} else if (length(res) > length(x)) {
+res <- res[1:length(x)]
+}
+names(res) <- x
+res
+}
+dataf %>%
+filter(metric == "J_usage") %>%
+filter(variable != "TRBJ2-2P") -> data.j
+data.j %>%
+dcast(Tcell_response_level + sample_id ~ variable, value.var = "value") -> mat.j
+mat.j.row.meta <- mat.j %>% select(Tcell_response_level)
+rownames(mat.j) <- mat.j$sample_id
+mat.j <- mat.j %>% select(-Tcell_response_level, -sample_id) %>% as.matrix
+Heatmap(
+log10(mat.j + 1e-6),
+col = brewer.pal(9, "YlGnBu"),
+cluster_rows = T,
+cluster_columns = T,
+show_row_names = F,
+right_annotation = with(mat.j.row.meta,
+rowAnnotation(
+Tcell_response_level = Tcell_response_level,
+col = list(
+Tcell_response_level = gen_col(Tcell_response_level, "Greys")
+)
+)
+),
+use_raster = T, raster_resize = T, raster_device = "png")
+
+
+dataf %>%
+filter(metric == "V_usage") -> data.v
+data.v %>%
+dcast(Tcell_response_level + sample_id ~ variable, value.var = "value") -> mat.v
+mat.v.row.meta <- mat.v %>% select(Tcell_response_level)
+rownames(mat.v) <- mat.v$sample_id
+mat.v <- mat.v %>% select(-Tcell_response_level, -sample_id) %>% as.matrix
+Heatmap(
+log10(mat.v + 1e-6),
+col = brewer.pal(9, "YlGnBu"),
+cluster_rows = T,
+cluster_columns = T,
+show_row_names = F,
+right_annotation = with(mat.j.row.meta,
+rowAnnotation(
+Tcell_response_level = Tcell_response_level,
+col = list(
+Tcell_response_level = gen_col(Tcell_response_level, "Greys")
+)
+)
+),
+use_raster = T, raster_resize = T, raster_device = "png"
+)
+
+
+dataf %>%
+filter(metric %in% c("V_usage", "J_usage")) %>%
+filter(variable != "TRBJ2-2P") -> data.vj
+data.vj %>%
+dcast(Tcell_response_level + sample_id ~ variable, value.var = "value") -> mat.vj
+mat.vj.row.meta <- mat.vj %>% select(Tcell_response_level)
+rownames(mat.vj) <- mat.vj$sample_id
+mat.vj <- mat.vj %>% select(-Tcell_response_level, -sample_id) %>% as.matrix
+Heatmap(
+log10(mat.vj + 1e-6),
+col = brewer.pal(9, "YlGnBu"),
+cluster_rows = T,
+cluster_columns = T,
+show_row_names = F,
+right_annotation = with(mat.j.row.meta,
+rowAnnotation(
+Tcell_response_level = Tcell_response_level,
+col = list(
+Tcell_response_level = gen_col(Tcell_response_level, "Greys")
+)
+)
+),
+use_raster = T, raster_resize = T, raster_device = "png"
+)
+
+
+autoplot(mat.full.pc, data = mat.full.pc.meta, colour = 'Tcell_response_level') +
+#scale_color_brewer(palette = "Paired") +
+theme_minimal() +
+scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+theme(aspect = 1, legend.position = "bottom")
+
+
+pc.labels <- data.frame(x = rownames(mat.full.pc$rotation)) %>%
+separate(x, c("metric", "variable"), sep = "\\.")
+Heatmap(mat.full.pc$rotation[,1:5],
+cluster_columns = F,
+row_labels = pc.labels$variable,
+col = rev(brewer.pal(9, "Spectral")),
+row_names_gp = gpar(fontsize = 8),
+right_annotation = rowAnnotation(metric = pc.labels$metric,
+col = list(
+metric = gen_col(pc.labels$metric, "Paired")
+))
+)
+
+data=read.csv('../feature_search/wilcox_test/BOXPLOTS/UNWEIGHT/gkb23_top_public_5000AA/gkb23_public_top_20000.tsv', sep="\t", header=TRUE)
+medi=median(log10(data$WEIGHT_SUM))
+data$COHORT=factor(data$COHORT,  
+                   levels=c("0-1 (no_response)", "3-6", "10-20", ">100"))
+ggplot(data, aes(x=COHORT, y=log10(WEIGHT_SUM))) +  
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) + 
+  geom_hline(yintercept=medi, linetype = "dashed") +
+  geom_quasirandom(method = 'pseudorandom', aes(colour=COHORT), size = 2) +
+  geom_boxplot(notch=FALSE, outlier.size = 0.7, lwd=0.7, alpha = 0) +
+  scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+  theme_light() +              
+  theme(text=element_text(size=14,  family="Helvetica")) +
+  labs(y= "sum of clones", x = "samples") +
+  ggtitle("public clones 20000, unweighted, top 5000")
+
+data=read.csv('../feature_search/wilcox_test/BOXPLOTS/FREQ/gkb23_top_public_5000AA/gkb23_public_top_20000.tsv', sep="\t", header=TRUE)
+medi=median(log10(data$WEIGHT_SUM))
+data$COHORT=factor(data$COHORT,  
+                   levels=c("0-1 (no_response)", "3-6", "10-20", ">100"))
+ggplot(data, aes(x=COHORT, y=log10(WEIGHT_SUM))) +  
+  theme(panel.background = element_rect(fill = "white", colour = "grey50")) + 
+  geom_hline(yintercept=medi, linetype = "dashed") +
+  geom_quasirandom(method = 'pseudorandom', aes(colour=COHORT), size = 2) +
+  geom_boxplot(notch=FALSE, outlier.size = 0.7, lwd=0.7, alpha = 0) +
+  scale_color_manual(values=c("#5AB25B", "#6E8541", "#825726", "#962A0C")) +  
+  theme_light() +              
+  theme(text=element_text(size=14,  family="Helvetica")) +
+  labs(y= "weighted sum of clones", x = "samples") +
+  ggtitle("public clones 20000, weighted, top 5000")
+
+dev.off() # Close the file
+```
+
+
+```
+

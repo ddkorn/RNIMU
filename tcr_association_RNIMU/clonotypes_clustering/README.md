@@ -1,0 +1,2 @@
+Similarity networks of COVID-associated public TCR clonotypes and sequence motif analysis. 
+Weighted and unweighted networks are used. Levenshtein distance and BLOSUM62-based distance are used as TCR distance metrics.
